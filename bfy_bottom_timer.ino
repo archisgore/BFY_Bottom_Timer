@@ -12,57 +12,55 @@
 B "Eff" Y Bottom Timer: Because 'Eff You!
 
 This project began when I got mad at various bottom timers (dive computers)
-out there for providing everything but what I needed. They have everything
-from fancy cables, and wet contacts, and Comic-book heads-up displays
-and science fiction stuff. What they don't have, is the damn reliability to
-not flood constantly or run out of batteries all the time.
+out there for dropping the ball on the little things. I don't need science fiction
+devices on the surface. I need a timer that works reliably. If I take a valve-cleaning
+workshop and a reg servicing cert so I understand my gear, I should be able to dissect
+my computer and know how it operates, what it's failure points are, etc. It is a critical
+piece of gear that keeps me alive, and I want to know how it works.
 
-I need the following out of my computers:
-1. Commodity parts - I want to buy batteries with a standard
-profile (aka I should be able to replace the with whatever I find
-that day.)
+Here's a few things I got mad about:
+1. Most need specialized parts. I can't use the O-rings I have. I can't use
+aquaseal. I don't have a choice on the material the housing is made of.
+I hate weird proprietary batteries.
 
-2. I'm sick of flooded compartments. Seriously. It's 2015. We should
-have inductive charging by now.
+2. I'm sick of flooded compartments. Compartment floods, and the entire thousand
+dollar device dies.
 
-3. BLE connectivity. No special addons. No special bullshit.
+3. I'm sick of special software, special wires and special protocols. No offense, but it
+is 2015 right now and every programmer worth having is currently being bid on for hundreds 
+of thousands of dollars. This means that my expensive hardware is useless if the manufacturer 
+goes out of business. Look at the battery compartment cover for your favourite computer right now.
+In the next 30 minutes, find out where you can find a replacement.
 
-4. Funnily enough, I was willing to pay a high cost for all the above,
-but decided I could build something better, cheaper, and simpler myself using off-the-shelf parts.
+4. It is not about cost, but it is about quality. "Nitrox capable" computers are twice as much as
+"Air" computers. I hate the entire scuba industry for this one - nobody wants to make an honest buck
+and nobody wants to pay for an honest service. Divers are petty deal-seekers, and manufacturers are
+slimy snake oil salesmen. For the life of me, I couldn't just "pay 2000 dollars for a quality constructed
+machine."
 
-5. Remember settings across resets. RTCs have been in computers since the 60s. Damn!
+So I decided to build my own. It started as a weekend boast and then I got 
+serious and designed a computer I wanted.
 
-For this code to work you need:
-1. Any Arduino compatible board with 7 digital I/O pins to spare (analog pins double up as Digital pins), 
-   and 2 I2C pins to spare typically two of the Analog pins.
-2. The OpenROV IMU Sensor package which includes, compass, gyroscope, depth, temperature and accelerometer.
-   Packs quite the punch. One module has all the sensors needed for a bottom timer.
-3. Some sort of OLED SPI screen (I used Adafruit's 1.5" version, but doesn't matter.)
+The ingredients:
+1. Two of these (one for your computer, the other to wirelessly program it.) http://www.dfrobot.com/index.php?route=product/product&product_id=1122
+2. Your power supply: https://learn.adafruit.com/adafruit-powerboost-1000c-load-share-usb-charge-boost/overview
+3. Qi Pad for recharging without contact: https://www.adafruit.com/products/2117
+4. OLED Screen (because OLED is a cool thing you want on your computers.) https://www.adafruit.com/products/1431
+5. Slow vibration sensor (I use this to wake up the arduino from POWER_DOWN mode. Pretty cool - how much power you'll save.): https://www.adafruit.com/products/1767
+6. ChronoDot real time clock (to ALWAYS keep time): https://www.adafruit.com/products/255
+7. Battery (You can go smaller if you wish, or the large 6600mAH. It's all good.): https://www.adafruit.com/products/328
+8. I2C level shifter (IMU sensor operates on 3V, the Nano on 5V logic. Being safe.): https://www.adafruit.com/products/757
+9 The sensor (has everything you need on one circuit.) http://store.openrov.com/products/openrov-imu-depth-module
+10. Micro SD Card (go big here): http://www.amazon.com/SanDisk-Memory-Adapter--SDSDQUAN-064G-G4A-Version/dp/B00M55C1I2/ref=sr_1_2?s=electronics&ie=UTF8&qid=1430285862&sr=1-2&keywords=micro-sd+cards
 
+The procedure:
 
-Optional:
-1. I added a wireless Qi charger + LiPo battery + the adafruit trinket Lipo charger backpack.
-   This means my computer is never opened. I place it on a Qi charger when I'm done with a dive,
-   and the thing keeps on going.
-2. I also have an SPI BLE interface (or you can just use something like Bluduino.
-3. A battery-backed RTC so I don't have to keep setting the time every time the battery dies.
+First, make sure one of your nano's can program the other. Follow these instructions: http://www.dfrobot.com/wiki/index.php/Bluno_SKU:DFR0267#Wireless_Programming_via_BLE
 
-This code is demo-only - i.e. it shows depth, time and temperature on the OLED screen. But that's pretty much
-all you need to build complex math, algorithms or whatever you wish. Thanks to the acceleremoter, you can
-easily build a tap-based interface.
+One you test this out, make sure you use the PERIPHERAL board for everything that follows. Keep the CENTRAL board safe for future use.
 
-My current "prototype" costs me $200.
-
-Additionally, I connected a spring switch to Pin 2 of the Arduino (hardware interrupt)
-to wake it up by shaking. This means my low-power mode is REALLY low power with no mechanical contacts.
-
-This code has been copied from various places but modified significantly. Plenty of exemplary Arduino
-code is used as-is. It's really THAT simple and THAT cheap to build a decent bottom timer.
-
-So go forth and build your own - of variying power and varying capacities.
-
- ****************************************************/
-
+Next up, Connect the OLED Screen as follows:
+*/
 // You can use any (4 or) 5 pins 
 #define sclk 13 //CL
 #define mosi 11 //SI
@@ -72,6 +70,53 @@ So go forth and build your own - of variying power and varying capacities.
 #define dc   9  //DC
 #define SD_CS 8  //SC
 #define rst  7 //R
+
+/*
+Now format the SD card on your computer to MSDOS-FAT format and insert it into the OLED holder.
+
+Next up, connect the OpenROV IMU Sensor to LV side of the Level Shifter. There are 4 wires and they are obvious.
+
+Short the two grounds on the level shifter and hook them up to any ground on the nano. Apply 3V3 pin 
+from Nano to the LV pin on the level shifter. Apply the 5V pin from the Nano to the HV pin. I find it
+easiest to keep all wires color coded. SDA - White. SCL - Green, 5V/Vcc - RED, GND - Black. Pull out the same colored
+wires on the HV side of the level shifter, as they go in on the LV side from the sensor. Basically, I start by connecting
+the color coded wires on the sensor. Then I plug them into the level shifter's LV (Low Voltage) side. Keep VCC/GND where 
+they are, and put WHITE on A1 and GREEN on A2.
+
+On the other side, pull out a white wire from B1, and GREEN wire on B2.
+
+Next up, put in your chronodot's battery. I clipped off all headers here to save space. You don't have to. Connect the I2C 
+ports from the chronodot to the Nano. You'll notice the chronodot has the same pin labels on one side as our IMU sensor. 
+Solder the same color-coded wires like above.
+
+Now SHORT the wires from the chronodot to the HV side of the Level shifter (I2C devices share the same 4 wires).
+
+Finally connect this Levelshifter+Chronodot+IMU assembly to the Nano thus:
+LV -> 3V3
+HV -> 5V
+GND/GND -> GND
+SDA/White/B1 -> A4
+SCL/Green/B2 -> A5
+
+Finally, solder the vibration switch between GND, and Pin2 or Digital 2 or D2.
+
+Now plug in the USB Port and use this Arduino IDE and upload this program. For kicks, you can upload it over the BLE interface.
+
+You should see your sensor working, and your OLED should begin displaying stuff. When your program goes to sleep, 
+a little flick on the vibration switch will wake it up.
+
+Finally comes power. Plug in the Qi bad to the microusb side of the PowerBoost 1000C, and the battery in that white connector thingy.
+
+Pull out a Red ad Black wire from the side where it says + and Minus. Connect Black/GND/- to Arduino's GND. Connect Red/+/5V to Arduino's Vin (Nothing else!)
+
+Now your board is powered from the battery. If you place your Qi pad on a wireless charger, the battery will charge.
+
+I decided to coat everything in Epoxy to make them water-resistent and rigid, this ensure a slim chance of survival if the compartment/housing fails.
+
+
+ ****************************************************/
+
+
 
 // Color definitions
 #define	BLACK           0x0000
