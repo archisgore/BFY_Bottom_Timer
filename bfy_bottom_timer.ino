@@ -1,6 +1,12 @@
-#include <SD.h>
 #include <avr/sleep.h>
 #include <Time.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1351.h>
+#include <SPI.h>
+#include <SD.h>
+
+
 
 /*************************************************** 
 B "Eff" Y Bottom Timer: Because 'Eff You!
@@ -63,9 +69,9 @@ So go forth and build your own - of variying power and varying capacities.
 #define miso 12 //SO
 #define OLED_CS   10 //OC
 
-#define dc   A0  //DC
-#define SD_CS A1  //SC
-#define rst  A2 //R
+#define dc   9  //DC
+#define SD_CS 8  //SC
+#define rst  7 //R
 
 // Color definitions
 #define	BLACK           0x0000
@@ -77,19 +83,26 @@ So go forth and build your own - of variying power and varying capacities.
 #define YELLOW          0xFFE0  
 #define WHITE           0xFFFF
 
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1351.h>
-#include <SPI.h>
-#include <SD.h>
-
-#define WRITE_TEXT(x, y, text) \
-  tft.setCursor(x,y); \
-  tft.print(text);
+#define IDLE_INTERVAL_BEFORE_SLEEP 10 //5 minutes == 300 seconds
 
 
-#include <Wire.h>
+// Color definitions
+#define	BLACK           0x0000
+#define	BLUE            0x001F
+#define	RED             0xF800
+#define	GREEN           0x07E0
+#define CYAN            0x07FF
+#define MAGENTA         0xF81F
+#define YELLOW          0xFFE0  
+#define WHITE           0xFFFF
 
-const int DevAddress = 0x76;  // 7-bit I2C address of the MS5803
+#define WAKE_PIN 2
+
+#define WRITE_TEXT(x, y, text) writeText(x, y, text)
+
+
+const int IMUDevAddress = 0x76;  // 7-bit I2C address of the MS5803
+const int RTCDevAddress = 104; //7-bit I2C address of the RTC
 
 // Here are the commands that can be sent to the 5803
 
@@ -107,8 +120,6 @@ const byte D2_4096 = 0x58;
 const byte AdcRead = 0x00;
 const byte PromBaseAddress = 0xA0;
 
-
-
 unsigned int CalConstant[8];  // Matrix for holding calibration constants
 
 long AdcTemperature, AdcPressure;  // Holds raw ADC data for temperature and pressure
@@ -117,7 +128,20 @@ float T2, Off2, Sens2;  // Offsets for second-order temperature computation
  
 byte ByteHigh, ByteMiddle, ByteLow;  // Variables for I2C reads
 
-char displaybuffer[100];
+
+int t_seconds; //00-59;
+int t_minutes; //00-59;
+int t_hours;//1-12 - 00-23;
+int t_day;//1-7
+int t_date;//01-31
+int t_month;//01-12
+int t_year;//0-99;
+
+
+time_t timeOfLastInput;
+
+char displaybuffer[20];
+char filebuffer[20];
 
 // Option 1: use any pins but a little slower
 //Adafruit_SSD1351 tft = Adafruit_SSD1351(OLED_CS, dc, mosi, sclk, rst);  
@@ -128,19 +152,6 @@ char displaybuffer[100];
 // to use the microSD card (see the image drawing example)
 Adafruit_SSD1351 tft = Adafruit_SSD1351(OLED_CS, dc, rst);
 
-// Color definitions
-#define	BLACK           0x0000
-#define	BLUE            0x001F
-#define	RED             0xF800
-#define	GREEN           0x07E0
-#define CYAN            0x07FF
-#define MAGENTA         0xF81F
-#define YELLOW          0xFFE0  
-#define WHITE           0xFFFF
-
-int wakePin = 2;                 // pin used for waking up
-int sleepStatus = 0;             // variable to store a request for sleep
-int count = 0;
 
 float const pow2_23 = pow(2, 23),
             pow2_33 = pow(2, 33),
@@ -150,29 +161,66 @@ float const pow2_23 = pow(2, 23),
             pow2_8 = pow(2, 8),
             pow2_15 = pow(2, 15),
             pow2_21 = pow(2, 21),
-            pow2_15_divided_by_10000 = pow2_15 / 10000;
+            pow2_15_multiplied_by_10000 = pow2_15 * 10000.00,
+            nine_by_fivehundred = 9.0/500.0;
+            
+bool diveMode = false;
+bool sleepMode = false;
+
+File diveFile;
+
 
 void setup(void) {
-  //Serial.begin(9600);
-  //setupSleep();
-  SPI.setClockDivider(0);
-  setTime(0);
+  Serial.begin(9600);
+  Serial.println("Hello world!");
+  setupSleep();
   setupOLED(); 
   setupSdCard();
   setupIMUSensor();
+  setupMode();
   
-  setupScreen();
+  //Call this to reset the RTC
+  //setupTime();
 }
 
-void setupScreen() {
+void setupTime() {
+    t_seconds = 0;
+    t_minutes = 35;
+    t_hours = 20;
+    t_day = 2;
+    t_date = 28;
+    t_month = 4;
+    t_year = 2015;
+    set_time();
+    set_date();
+}
+
+void setupSleep() {
+   pinMode(WAKE_PIN, INPUT_PULLUP);
+   
+   attachInterrupt(0, wakeUpNow, LOW); // use interrupt 0 (pin 2) and run function
+   
+   set_sleep_mode(SLEEP_MODE_PWR_DOWN);   // sleep mode is set here
+ 
+   sleep_enable();          // enables the sleep bit in the mcucr register
+                             // so sleep is possible. just a safety pin                                   // wakeUpNow when pin 2 gets LOW
+}
+
+void setupMode() {
   tft.drawFastVLine(64, 0, 128, GREEN);
   tft.drawFastHLine(0, 64, 128, GREEN);
   
-  tft.setTextColor(RED, BLACK);
+  tft.setTextColor(GREEN, BLACK);
   WRITE_TEXT(5, 0, "Temp");
   WRITE_TEXT(70, 0, "Depth");
-  WRITE_TEXT(5, 65, "Time");  
-  tft.setTextColor(BLUE, BLACK);
+  
+  if (diveMode) { 
+    WRITE_TEXT(5, 65, "Dive"); 
+    tft.setTextColor(RED, BLACK);
+  } else {
+    WRITE_TEXT(5, 65, "Surface");
+    tft.setTextColor(BLUE, BLACK);
+  }
 }
 
 void setupOLED() {
@@ -188,77 +236,38 @@ void setupOLED() {
 
 void setupIMUSensor() {
   Wire.begin();
-  //Serial.println("initialized I2C");
-  
-  testdrawtext("Initializing IMU Sensor...", BLUE);
   // Reset the device and check for device presence 
-  sendCommand(Reset);
+  sendCommand(IMUDevAddress, Reset);
   delay(1000);
    
   // Get the calibration constants and store in array
   for (byte i = 0; i < 8; i++)
   {
-    sendCommand(PromBaseAddress + (2*i));
-    Wire.requestFrom(DevAddress, 2);
+    sendCommand(IMUDevAddress, PromBaseAddress + (2*i));
+    Wire.requestFrom(IMUDevAddress, 2);
     while(Wire.available()){
       ByteHigh = Wire.read();
       ByteLow = Wire.read();
     }
     CalConstant[i] = (((unsigned int)ByteHigh << 8) + ByteLow);
   }
-  
-  testdrawtext("Calibration successful.", BLUE);
 }
 
 void setupSdCard() {
-  //Serial.print("Initializing SD card...");
-  testdrawtext("Trying to open SD Card", RED);
 
   if (!SD.begin(SD_CS)) {
-    //Serial.println("failed!");
-    return;
+    WRITE_TEXT(0, 0, "UNABLE TO OPEN SD CARD. Dive LOGGING will not work.");
+    delay(20000);
   }
   //Serial.println("SD OK!");
-
-  createFile();
-  
-  readAndShowFile();
-
-}
-
-void setupSleep() {
-    pinMode(wakePin, INPUT);
-
-   
-  /* Now it is time to enable an interrupt. In the function call
-   * attachInterrupt(A, B, C)
-   * A   can be either 0 or 1 for interrupts on pin 2 or 3.  
-   *
-   * B   Name of a function you want to execute while in interrupt A.
-   *
-   * C   Trigger mode of the interrupt pin. can be:
-   *             LOW        a low level trigger
-   *             CHANGE     a change in level trigger
-   *             RISING     a rising edge of a level trigger
-   *             FALLING    a falling edge of a level trigger
-   *
-   * In all but the IDLE sleep modes only LOW can be used.
-   */
- 
-  attachInterrupt(0, wakeUpNow, RISING); // use interrupt 0 (pin 2) and run function
-                                      // wakeUpNow when pin 2 gets LOW
-                                      
-                         
 }
 
 void loop(){
-
   // Read the Device for the ADC Temperature and Pressure values
-  
-  sendCommand(D1_512);
+  sendCommand(IMUDevAddress, D1_512);
   delay(10);
-  sendCommand(AdcRead);
-  Wire.requestFrom(DevAddress, 3);
+  sendCommand(IMUDevAddress, AdcRead);
+  Wire.requestFrom(IMUDevAddress, 3);
   while(Wire.available())
   {
     ByteHigh = Wire.read();
@@ -270,10 +279,10 @@ void loop(){
 //  Serial.print("D1 is: ");
 //  Serial.println(AdcPressure);
   
-  sendCommand(D2_512);
+  sendCommand(IMUDevAddress, D2_512);
   delay(10);
-  sendCommand(AdcRead);
-  Wire.requestFrom(DevAddress, 3);
+  sendCommand(IMUDevAddress, AdcRead);
+  Wire.requestFrom(IMUDevAddress, 3);
   while(Wire.available())
   {
     ByteHigh = Wire.read();
@@ -317,7 +326,8 @@ void loop(){
   
   // Print the temperature results
   
-  Temperature = Temperature / 100;  // Convert to degrees C
+  //Temperature = Temperature / 100;  // Convert to degrees C
+  Temperature = Temperature * nine_by_fivehundred + 32;
   //Serial.print("First-Order Temperature in Degrees C is ");
   //Serial.println(Temperature);
   //Serial.print("Second-Order Temperature in Degrees C is ");
@@ -340,7 +350,7 @@ void loop(){
 
   Pressure = (float)AdcPressure * Sensitivity / pow2_21;
   Pressure = Pressure - Offset;
-  Pressure = Pressure / pow2_15_divided_by_10000;
+  Pressure = Pressure / pow2_15_multiplied_by_10000;
   
   // Convert to psig and display
   
@@ -349,128 +359,126 @@ void loop(){
   //Serial.print("Pressure in psi is: ");
   //Serial.println(Pressure);
   //Serial.println();
-    
-  drawScreen(Temperature, Pressure * 33.33);
-}
-
-void drawScreen(float Temperature, float Depth) {
-  sprintf(displaybuffer, "%2d C", (int)Temperature);
-  WRITE_TEXT(5, 30, displaybuffer);
+  float depth = (Pressure * 33.33);
   
-  sprintf(displaybuffer, "%3d ft", (int)Depth);
-  WRITE_TEXT(75, 30, displaybuffer);
-  
-  sprintf(displaybuffer, "%2d:%2d:%2d", hour(), minute(), second());
-  WRITE_TEXT(5, 95, displaybuffer);
-}
-
-void createFile() {
-  //Serial.println("Creating divecomputer.txt in SD card");
-  File f = SD.open("/divecomputer.txt", FILE_WRITE);
-  f.write("Hello World!", sizeof('a') * 13);
-  f.close();
-}
-
-void readAndShowFile() {
-  //Serial.println("Opening root directory");
-  File f = SD.open("/", FILE_READ);
-  while (f != NULL) {
-    //Serial.println(f.name());
-    testdrawtext(f.name(), RED);
-    f = f.openNextFile();
-    delay(1000);
+  if (diveMode && depth < 1) {
+    diveFile.close();
+    diveMode = false;
+    timeOfLastInput = now();
+    setupMode();
+  } else if (!diveMode && depth > 1) {
+    diveMode = true;
+    sleepMode = false;
+    diveFile = SD.open(getDiveFileName(), FILE_WRITE);
+    setupMode();
+  }
+  if (!diveMode && !sleepMode && now() - timeOfLastInput > IDLE_INTERVAL_BEFORE_SLEEP) {
+    goToSleep();
+  }
+  if (!sleepMode) {
+    logDiveEntry(Temperature, depth);
+    drawScreen(Temperature, depth);
   }
 }
 
-void testdrawtext(char *text, uint16_t color) {
-  /*
-  tft.fillRect(0, 100, 128, 128, BLACK);
-  tft.setCursor(0, 100);
-  tft.setTextColor(color);
-  tft.print(text);
-  */
+void drawScreen(int temp, int depth) {
+  
+  sprintf(displaybuffer, "%02d F", temp);
+  WRITE_TEXT(5, 30, displaybuffer);
+  
+  sprintf(displaybuffer, "%03d ft", depth);
+  WRITE_TEXT(75, 30, displaybuffer);
+  
+  get_time();
+  sprintf(displaybuffer, "%02d:%02d:%02d", t_hours, t_minutes, t_seconds);
+  WRITE_TEXT(5, 95, displaybuffer);
 }
-             // counter
- 
+
+void logDiveEntry(float temp, float depth) {
+  int buflen = sprintf(filebuffer, "%5.5d, %5.5d\n", temp, depth);
+  diveFile.write(filebuffer, buflen);
+  diveFile.flush();
+}
+
+void sendCommand(int device, byte command){
+  Wire.beginTransmission(device);
+  Wire.write(command);
+  Wire.endTransmission();
+}
+
+void goToSleep() {
+}
+
+
 void wakeUpNow()        // here the interrupt is handled after wakeup
 {
   // execute code here after wake-up before returning to the loop() function
   // timers and code using timers (serial.print and more...) will not work here.
   // we don't really need to execute any special functions here, since we
   // just want the thing to wake up
+  sleepMode = false;
+  timeOfLastInput = now();
 }
 
-void sleepNow()         // here we put the arduino to sleep
+void writeText(int x, int y, char *text) {
+  tft.setCursor(x,y);
+  tft.print(text);
+}
+
+char* getDiveFileName() {
+  return "log.csv";
+}
+
+void get_date()
 {
-    /* Now is the time to set the sleep mode. In the Atmega8 datasheet
-     * http://www.atmel.com/dyn/resources/prod_documents/doc2486.pdf on page 35
-     * there is a list of sleep modes which explains which clocks and
-     * wake up sources are available in which sleep mode.
-     *
-     * In the avr/sleep.h file, the call names of these sleep modes are to be found:
-     *
-     * The 5 different modes are:
-     *     SLEEP_MODE_IDLE         -the least power savings
-     *     SLEEP_MODE_ADC
-     *     SLEEP_MODE_PWR_SAVE
-     *     SLEEP_MODE_STANDBY
-     *     SLEEP_MODE_PWR_DOWN     -the most power savings
-     *
-     * For now, we want as much power savings as possible, so we
-     * choose the according
-     * sleep mode: SLEEP_MODE_PWR_DOWN
-     *
-     */  
-    set_sleep_mode(SLEEP_MODE_PWR_DOWN);   // sleep mode is set here
- 
-    sleep_enable();          // enables the sleep bit in the mcucr register
-                             // so sleep is possible. just a safety pin
- 
-    /* Now it is time to enable an interrupt. We do it here so an
-     * accidentally pushed interrupt button doesn't interrupt
-     * our running program. if you want to be able to run
-     * interrupt code besides the sleep function, place it in
-     * setup() for example.
-     *
-     * In the function call attachInterrupt(A, B, C)
-     * A   can be either 0 or 1 for interrupts on pin 2 or 3.  
-     *
-     * B   Name of a function you want to execute at interrupt for A.
-     *
-     * C   Trigger mode of the interrupt pin. can be:
-     *             LOW        a low level triggers
-     *             CHANGE     a change in level triggers
-     *             RISING     a rising edge of a level triggers
-     *             FALLING    a falling edge of a level triggers
-     *
-     * In all but the IDLE sleep modes only LOW can be used.
-     */
- 
-    attachInterrupt(0,wakeUpNow, RISING); // use interrupt 0 (pin 2) and run function
-                                       // wakeUpNow when pin 2 gets LOW
- 
-    sleep_mode();            // here the device is actually put to sleep!!
-                             // THE PROGRAM CONTINUES FROM HERE AFTER WAKING UP
- 
-    sleep_disable();         // first thing after waking from sleep:
-                             // disable sleep...
-    detachInterrupt(0);      // disables interrupt 0 on pin 2 so the
-                             // wakeUpNow code will not be executed
-                             // during normal running time.
-                             
-    count = 0;
- 
+  sendCommand(RTCDevAddress, 3);
+  Wire.requestFrom(RTCDevAddress, 4); //get 5 bytes(day,date,month,year,control);
+  while (Wire.available()) {
+    t_day   = bcdToDec(Wire.read());
+    t_date  = bcdToDec(Wire.read());
+    t_month = bcdToDec(Wire.read());
+    t_year  = bcdToDec(Wire.read());
+  }
 }
 
+void get_time()
+{
+  sendCommand(RTCDevAddress, 0);
+  Wire.requestFrom(RTCDevAddress, 3);//get 3 bytes (seconds,minutes,hours);
+  while (Wire.available()) {
+    t_seconds = bcdToDec(Wire.read() & 0x7f);
+    t_minutes = bcdToDec(Wire.read());
+    t_hours = bcdToDec(Wire.read() & 0x3f); 
+  }
+}
 
-void sendCommand(byte command){
-  Wire.beginTransmission(DevAddress);
-  Wire.write(command);
+void set_time()
+{
+   Wire.beginTransmission(RTCDevAddress);
+   Wire.write(0);
+   Wire.write(decToBcd(t_seconds));
+   Wire.write(decToBcd(t_minutes));
+   Wire.write(decToBcd(t_hours));
+   Wire.endTransmission();
+}
+
+void set_date()
+{
+  Wire.beginTransmission(RTCDevAddress);
+  Wire.write(3);
+  Wire.write(decToBcd(t_day));
+  Wire.write(decToBcd(t_date));
+  Wire.write(decToBcd(t_month));
+  Wire.write(decToBcd(t_year));
   Wire.endTransmission();
 }
 
+byte decToBcd(byte val)
+{
+  return ( (val/10*16) + (val%10) );
+}
 
-
-
-
- 
+byte bcdToDec(byte val)
+{
+  return ( (val/16*10) + (val%16) );
+}
